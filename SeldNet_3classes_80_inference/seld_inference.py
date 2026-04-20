@@ -60,7 +60,7 @@ from typing import Any, Dict, List, Optional, Tuple, Set
 
 
 # =============================================================================
-# Параметры по умолчанию для SeldNet_3classes_80
+# Параметры по умолчанию для SeldNet_3classes_80 (Task IDs 2-7)
 # =============================================================================
 DEFAULT_PARAMS_80 = dict(
     fs=250000,
@@ -87,6 +87,42 @@ DEFAULT_PARAMS_80 = dict(
     nb_self_attn_layers=2,
     nb_rnn_layers=2,
     rnn_size=128,
+    nb_fnn_layers=1,
+    fnn_size=128,
+    dataset='mic',
+    raw_chunks=False,
+)
+
+
+# =============================================================================
+# Параметры по умолчанию для CSTFormer (Task ID 33)
+# =============================================================================
+DEFAULT_PARAMS_CST = dict(
+    fs=250000,
+    hop_len_s=0.02,
+    label_hop_len_s=0.04,
+    nb_mel_bins=256,
+    mel_fmin_hz=0.0,
+    mel_fmax_hz=5000.0,
+    n_mics=4,
+    classes_list=['class_0', 'class_1', 'class_2'],  # список классов
+    target_class=0,  # целевой класс (индекс в classes_list)
+    model='cstformer',
+    multi_accdoa=True,
+    label_sequence_length=50,  # CST часто работает с более длинными контекстами
+    dropout_rate=0.1,
+    nb_cnn2d_filt=64,
+    f_pool_size=[4, 4, 2],
+    use_salsalite=False,  # по умолчанию не используем SALSA
+    # Специфичные параметры для Трансформера
+    patch_size=16,
+    num_heads=8,
+    embed_dim=256,
+    num_layers=4,
+    # Параметры для совместимости с SeldModel
+    rnn_size=128,
+    nb_rnn_layers=2,
+    nb_self_attn_layers=2,
     nb_fnn_layers=1,
     fnn_size=128,
     dataset='mic',
@@ -135,6 +171,14 @@ REQUIRED_PARAMS_BY_TASK: Dict[str, Set[str]] = {
         'fmin_doa_salsalite', 'fmax_doa_salsalite', 'fmax_spectra_salsalite', 'multi_accdoa',
         'nb_cnn2d_filt', 'f_pool_size', 'dropout_rate', 'nb_heads', 'nb_self_attn_layers',
         'nb_rnn_layers', 'rnn_size', 'nb_fnn_layers', 'fnn_size',
+    },
+    '33': {  # CSTFormer - Transformer-based SELD
+        'fs', 'hop_len_s', 'label_hop_len_s', 'nb_mel_bins', 'mel_fmin_hz', 'mel_fmax_hz',
+        'n_mics', 'classes_list', 'target_class', 'label_sequence_length', 'dataset', 'multi_accdoa',
+        'patch_size', 'num_heads', 'embed_dim', 'num_layers', 'dropout_rate',
+        'nb_cnn2d_filt', 'f_pool_size', 'use_salsalite',
+        # Параметры для совместимости с SeldModel (хотя CST может использовать другую архитектуру)
+        'rnn_size', 'nb_rnn_layers', 'nb_heads', 'nb_self_attn_layers', 'nb_fnn_layers', 'fnn_size',
     },
 }
 
@@ -567,8 +611,11 @@ class SELDInference:
     
     def _get_params_for_task(self, task_id: str, user_params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """Возвращает параметры для заданной задачи."""
-        # Начинаем с параметров по умолчанию
-        params = DEFAULT_PARAMS_80.copy()
+        # Выбор параметров по умолчанию в зависимости от task_id
+        if task_id == '33':
+            params = DEFAULT_PARAMS_CST.copy()
+        else:
+            params = DEFAULT_PARAMS_80.copy()
         
         # Переопределяем пользовательскими параметрами
         if user_params is not None:
@@ -598,11 +645,18 @@ class SELDInference:
         elif task_id == '3':
             params.setdefault('dataset', 'foa')
             params.setdefault('multi_accdoa', True)
+        elif task_id == '33':
+            params.setdefault('dataset', 'mic')
+            params.setdefault('multi_accdoa', True)
+            params.setdefault('n_mics', 4)
         
         _recompute_time_derived(params)
         
-        # Настройка t_pool_size
-        params['t_pool_size'] = [params['feature_label_resolution'], 1, 1]
+        # Настройка t_pool_size (для CSTFormer может быть другой)
+        if task_id == '33':
+            params.setdefault('t_pool_size', [1, 1, 1])
+        else:
+            params['t_pool_size'] = [params['feature_label_resolution'], 1, 1]
         
         # Вычисление количества каналов
         nm = int(params['n_mics'])
