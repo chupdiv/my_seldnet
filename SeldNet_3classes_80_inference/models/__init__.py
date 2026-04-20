@@ -24,7 +24,23 @@ from .cst_former import (
     ule_mha_num_heads,
 )
 
+from .ngcc import (
+    NGCC_model,
+    SincNet,
+    SincConv_fast,
+    GCC,
+    LayerNorm,
+)
+
+from .seldnet import (
+    SeldModel,
+    MySeldModel,
+    ConvBlock,
+    MSELoss_ADPIT,
+)
+
 __all__ = [
+    # CSTFormer
     'CST_former',
     'Encoder',
     'CST_encoder',
@@ -45,4 +61,14 @@ __all__ = [
     'encoder_output_tf',
     'choose_ule_patch_sizes',
     'ule_mha_num_heads',
+    # NGCC
+    'NGCC_model',
+    'SincNet',
+    'SincConv_fast',
+    'GCC',
+    'LayerNorm',
+    # SeldNet
+    'SeldModel',
+    'MySeldModel',
+    'MSELoss_ADPIT',
 ]
