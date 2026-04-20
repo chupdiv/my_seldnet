@@ -8,7 +8,13 @@ import torch
 import torch.nn.functional as F
 import torch.nn as nn
 import torch.fft
-import torchaudio
+
+# torchaudio используется только для transforms, которые могут быть заменены
+try:
+    import torchaudio
+except (ImportError, OSError):
+    # Если torchaudio недоступен (например, нет CUDA), используем заглушку
+    torchaudio = None
 
 
 def get_pad(size, kernel_size=3, stride=1, dilation=1):
@@ -378,21 +384,29 @@ class NGCC_model(nn.Module):
 
         if self.use_mel:
             self.nfft = next_greater_power_of_2(2 * sig_len)
-            self.spec_transform = torchaudio.transforms.Spectrogram(
-                n_fft=self.nfft, win_length=2*sig_len, hop_length=sig_len, normalized=True
-            )
-            self.mel_transform = torchaudio.transforms.MelScale(
-                n_mels=self.n_mel_bins, sample_rate=fs, n_stft=self.nfft//2+1, norm='slaney'
-            )
-            self.to_db = torchaudio.transforms.AmplitudeToDB(stype="power", top_db=80)
-            if self.use_mfcc:
-                melkwargs = {
-                    "n_fft": self.nfft, "win_length": 2*sig_len, "power": 1,
-                    "hop_length": sig_len, "n_mels": 80, "f_min": 20, "f_max": 7000
-                }
-                self.mfcc = torchaudio.transforms.MFCC(
-                    sample_rate=fs, n_mfcc=n_mel_bins, log_mels=True, melkwargs=melkwargs
+            if torchaudio is not None:
+                self.spec_transform = torchaudio.transforms.Spectrogram(
+                    n_fft=self.nfft, win_length=2*sig_len, hop_length=sig_len, normalized=True
                 )
+                self.mel_transform = torchaudio.transforms.MelScale(
+                    n_mels=self.n_mel_bins, sample_rate=fs, n_stft=self.nfft//2+1, norm='slaney'
+                )
+                self.to_db = torchaudio.transforms.AmplitudeToDB(stype="power", top_db=80)
+                if self.use_mfcc:
+                    melkwargs = {
+                        "n_fft": self.nfft, "win_length": 2*sig_len, "power": 1,
+                        "hop_length": sig_len, "n_mels": 80, "f_min": 20, "f_max": 7000
+                    }
+                    self.mfcc = torchaudio.transforms.MFCC(
+                        sample_rate=fs, n_mfcc=n_mel_bins, log_mels=True, melkwargs=melkwargs
+                    )
+            else:
+                # Заглушка, если torchaudio недоступен
+                self.spec_transform = None
+                self.mel_transform = None
+                self.to_db = None
+                self.mfcc = None
+                raise RuntimeError("torchaudio недоступен. Установите CPU-версию: pip install torchaudio --index-url https://download.pytorch.org/whl/cpu")
         else:
             in_size = sig_len // self.final_kernel
             self.proj = nn.Sequential(

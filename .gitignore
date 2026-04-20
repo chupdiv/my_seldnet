@@ -1,42 +1,14 @@
 ```
-# Python
+# Compiled Python files
+*.pyc
 __pycache__/
+
+# Python cache directories
 *.pyc
 *.pyo
 *.pyd
 .Python
-env/
-venv/
-.venv/
-.ENV
-.ENV.local
-.env
-.env.local
-.env.*
-.envrc
-.pytest_cache/
-.mypy_cache/
-.coverage
-coverage/
-htmlcov/
-
-# Build and distribution artifacts
-dist/
-build/
+*.so
 *.egg-info/
 .eggs/
-.installed.cfg
-*.egg
-
-# IDE and editor files
-.vscode/
-.idea/
-*.swp
-*.swo
-*.tmp
-*.log
-
-# OS generated files
-.DS_Store
-Thumbs.db
 ```

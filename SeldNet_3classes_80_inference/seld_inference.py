@@ -58,6 +58,22 @@ import librosa
 import joblib
 from typing import Any, Dict, List, Optional, Tuple, Set
 
+# Импорты архитектур моделей из локального каталога models/
+try:
+    from models.seldnet import SeldModel
+    from models.ngcc import NGCC_model
+    from models.cst_former import CST_former as CSTFormer
+except ImportError:
+    # Если запуск идет не из корня проекта, пытаемся добавить путь
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    models_dir = os.path.join(current_dir, 'models')
+    if models_dir not in sys.path:
+        sys.path.insert(0, models_dir)
+    
+    from seldnet import SeldModel
+    from ngcc import NGCC_model
+    from cst_former import CST_former as CSTFormer
+
 
 # =============================================================================
 # Параметры по умолчанию для SeldNet_3classes_80 (Task IDs 2-7)
@@ -791,18 +807,17 @@ class SELDInference:
     
     def _create_and_load_model(self, weights_path: str) -> torch.nn.Module:
         """Создаёт и загружает модель из файла весов."""
+        task_id = self.params.get('task_id', '6')
+        
         # Входная форма: (batch, channels, time, freq)
         channels = self.params['nb_channels']
         time_steps = self.params['feature_sequence_length']
-        freq_bins = self.params['nb_mel_bins'] * self.params['n_mics'] + \
-                   (self.params['n_mics'] * (self.params['n_mics'] - 1) // 2) * self.params['nb_mel_bins'] \
-                   if not self.params['use_salsalite'] else self.params['nb_mel_bins'] * 7
         
         # Упрощённый расчёт: mel по каждому каналу + gcc по парам
         nm = self.params['n_mics']
         mel_dim = self.params['nb_mel_bins'] * nm
         gcc_dim = self.params['nb_mel_bins'] * (nm * (nm - 1) // 2)
-        freq_dim = mel_dim + gcc_dim if not self.params['use_salsalite'] else self.params['nb_mel_bins'] * 7
+        freq_dim = mel_dim + gcc_dim if not self.params.get('use_salsalite', False) else self.params['nb_mel_bins'] * 7
         
         in_feat_shape = (None, channels, time_steps, freq_dim)
         
@@ -813,7 +828,16 @@ class SELDInference:
         out_dim = nb_tracks * nb_axes * nb_classes
         out_shape = (None, time_steps, out_dim)
         
-        model = SeldModel(in_feat_shape, out_shape, self.params)
+        # Выбор архитектуры модели в зависимости от task_id
+        if task_id in ('32', '33', '34', '333'):
+            # CSTFormer архитектура
+            model = CSTFormer(in_feat_shape, out_shape, self.params)
+        elif task_id in ('9', '10'):
+            # NGCC архитектура
+            model = NGCC_model(in_feat_shape, out_shape, self.params)
+        else:
+            # Стандартная SeldNet архитектура
+            model = SeldModel(in_feat_shape, out_shape, self.params)
         
         # Загрузка весов
         if os.path.exists(weights_path):
