@@ -4,7 +4,42 @@
 
 Использование:
     from seld_inference import SELDInference
-    infer = SELDInference(weights_path='path/to/weights.pth', task_id='6')
+    
+    # Вариант 1: передача параметров явно
+    params = {
+        'fs': 250000,
+        'hop_len_s': 0.02,
+        'label_hop_len_s': 0.04,
+        'nb_mel_bins': 256,
+        'mel_fmax_hz': 5000.0,
+        'n_mics': 4,
+        'unique_classes': 3,
+        'label_sequence_length': 5,
+        'dataset': 'mic',
+        'use_salsalite': False,
+        'multi_accdoa': True,
+        'nb_cnn2d_filt': 64,
+        'f_pool_size': [4, 4, 2],
+        'dropout_rate': 0.05,
+        'nb_heads': 8,
+        'nb_self_attn_layers': 2,
+        'nb_rnn_layers': 2,
+        'rnn_size': 128,
+        'nb_fnn_layers': 1,
+        'fnn_size': 128,
+    }
+    infer = SELDInference(
+        weights_path='path/to/weights.pth',
+        params=params,
+        task_id='6'
+    )
+    result = infer.infer(audio_path='path/to/audio.wav')
+    
+    # Вариант 2: использование параметров по умолчанию
+    infer = SELDInference(
+        weights_path='path/to/weights.pth',
+        task_id='6'
+    )
     result = infer.infer(audio_path='path/to/audio.wav')
 """
 from __future__ import annotations
@@ -19,7 +54,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import librosa
 import joblib
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Set
 
 
 # =============================================================================
@@ -54,6 +89,60 @@ DEFAULT_PARAMS_80 = dict(
     dataset='mic',
     raw_chunks=False,
 )
+
+
+# =============================================================================
+# Требуемые параметры для каждого task_id
+# =============================================================================
+REQUIRED_PARAMS_BY_TASK: Dict[str, Set[str]] = {
+    '2': {  # FOA, single-ACCDOA
+        'fs', 'hop_len_s', 'label_hop_len_s', 'nb_mel_bins', 'mel_fmin_hz', 'mel_fmax_hz',
+        'n_mics', 'unique_classes', 'label_sequence_length', 'dataset', 'multi_accdoa',
+        'nb_cnn2d_filt', 'f_pool_size', 'dropout_rate', 'nb_heads', 'nb_self_attn_layers',
+        'nb_rnn_layers', 'rnn_size', 'nb_fnn_layers', 'fnn_size',
+    },
+    '3': {  # FOA, multi-ACCDOA
+        'fs', 'hop_len_s', 'label_hop_len_s', 'nb_mel_bins', 'mel_fmin_hz', 'mel_fmax_hz',
+        'n_mics', 'unique_classes', 'label_sequence_length', 'dataset', 'multi_accdoa',
+        'nb_cnn2d_filt', 'f_pool_size', 'dropout_rate', 'nb_heads', 'nb_self_attn_layers',
+        'nb_rnn_layers', 'rnn_size', 'nb_fnn_layers', 'fnn_size',
+    },
+    '4': {  # MIC, single-ACCDOA
+        'fs', 'hop_len_s', 'label_hop_len_s', 'nb_mel_bins', 'mel_fmin_hz', 'mel_fmax_hz',
+        'n_mics', 'unique_classes', 'label_sequence_length', 'dataset', 'multi_accdoa',
+        'nb_cnn2d_filt', 'f_pool_size', 'dropout_rate', 'nb_heads', 'nb_self_attn_layers',
+        'nb_rnn_layers', 'rnn_size', 'nb_fnn_layers', 'fnn_size',
+    },
+    '5': {  # MIC, SALSA, single-ACCDOA
+        'fs', 'hop_len_s', 'label_hop_len_s', 'nb_mel_bins', 'mel_fmin_hz', 'mel_fmax_hz',
+        'n_mics', 'unique_classes', 'label_sequence_length', 'dataset', 'use_salsalite',
+        'fmin_doa_salsalite', 'fmax_doa_salsalite', 'fmax_spectra_salsalite', 'multi_accdoa',
+        'nb_cnn2d_filt', 'f_pool_size', 'dropout_rate', 'nb_heads', 'nb_self_attn_layers',
+        'nb_rnn_layers', 'rnn_size', 'nb_fnn_layers', 'fnn_size',
+    },
+    '6': {  # MIC, multi-ACCDOA (основная конфигурация SeldNet_3classes_80)
+        'fs', 'hop_len_s', 'label_hop_len_s', 'nb_mel_bins', 'mel_fmin_hz', 'mel_fmax_hz',
+        'n_mics', 'unique_classes', 'label_sequence_length', 'dataset', 'multi_accdoa',
+        'nb_cnn2d_filt', 'f_pool_size', 'dropout_rate', 'nb_heads', 'nb_self_attn_layers',
+        'nb_rnn_layers', 'rnn_size', 'nb_fnn_layers', 'fnn_size',
+    },
+    '7': {  # MIC, SALSA, multi-ACCDOA
+        'fs', 'hop_len_s', 'label_hop_len_s', 'nb_mel_bins', 'mel_fmin_hz', 'mel_fmax_hz',
+        'n_mics', 'unique_classes', 'label_sequence_length', 'dataset', 'use_salsalite',
+        'fmin_doa_salsalite', 'fmax_doa_salsalite', 'fmax_spectra_salsalite', 'multi_accdoa',
+        'nb_cnn2d_filt', 'f_pool_size', 'dropout_rate', 'nb_heads', 'nb_self_attn_layers',
+        'nb_rnn_layers', 'rnn_size', 'nb_fnn_layers', 'fnn_size',
+    },
+}
+
+# Параметры, используемые непосредственно в инференсе (минимальный набор)
+INFERENCE_ONLY_PARAMS = {
+    'fs', 'hop_len_s', 'label_hop_len_s', 'nb_mel_bins', 'mel_fmin_hz', 'mel_fmax_hz',
+    'n_mics', 'dataset', 'use_salsalite', 'multi_accdoa', 'unique_classes',
+    'label_sequence_length', 'nb_cnn2d_filt', 'f_pool_size', 'dropout_rate',
+    'nb_heads', 'nb_self_attn_layers', 'nb_rnn_layers', 'rnn_size',
+    'nb_fnn_layers', 'fnn_size',
+}
 
 
 def _recompute_time_derived(params: Dict[str, Any]) -> None:
@@ -361,9 +450,17 @@ class SELDInference:
     Класс для выполнения инференса модели SELDNet.
     
     Пример использования:
+        # Вариант 1: с явной передачей параметров
+        params = {'fs': 250000, 'n_mics': 4, ...}
         infer = SELDInference(
             weights_path='models/seldnet_model_final.pth',
-            scaler_path='feat_label/scaler.joblib',
+            params=params,
+            task_id='6'
+        )
+        
+        # Вариант 2: с использованием параметров по умолчанию
+        infer = SELDInference(
+            weights_path='models/seldnet_model_final.pth',
             task_id='6'
         )
         results = infer.infer('audio.wav')
@@ -374,6 +471,7 @@ class SELDInference:
         weights_path: str,
         scaler_path: Optional[str] = None,
         task_id: str = '6',
+        params: Optional[Dict[str, Any]] = None,
         device: Optional[str] = None,
         threshold: float = 0.5
     ):
@@ -382,6 +480,8 @@ class SELDInference:
             weights_path: путь к файлу весов модели (.pth)
             scaler_path: путь к файлу скалера для нормализации (опционально)
             task_id: идентификатор задачи (влияет на параметры)
+            params: словарь параметров модели. Если None, используются параметры по умолчанию.
+                   Должен содержать все необходимые параметры для указанного task_id.
             device: устройство для вычислений ('cuda', 'cpu', или None для автовыбора)
             threshold: порог активности для детекции событий
         """
@@ -394,9 +494,12 @@ class SELDInference:
             self.device = device
         
         # Загрузка параметров для задачи
-        self.params = self._get_params_for_task(task_id)
+        self.params = self._get_params_for_task(task_id, params)
         
-        # Создание экстрактора признаков
+        # Валидация параметров (самая первая операция - до любых файловых операций)
+        self._validate_params_for_task(task_id)
+        
+        # Создание экстрактора признаков (может загружать scaler файл)
         self.feature_extractor = FeatureExtractor(self.params, scaler_path=scaler_path)
         
         # Создание и загрузка модели
@@ -404,34 +507,88 @@ class SELDInference:
         self.model.to(self.device)
         self.model.eval()
     
-    def _get_params_for_task(self, task_id: str) -> Dict[str, Any]:
+    def _validate_params_for_task(self, task_id: str) -> None:
+        """
+        Проверяет наличие всех необходимых параметров для указанного task_id.
+        
+        Args:
+            task_id: идентификатор задачи
+            
+        Raises:
+            ValueError: если отсутствуют необходимые параметры
+        """
+        if task_id not in REQUIRED_PARAMS_BY_TASK:
+            raise ValueError(f"Неподдерживаемый task_id: {task_id}. Допустимые значения: {list(REQUIRED_PARAMS_BY_TASK.keys())}")
+        
+        required_params = REQUIRED_PARAMS_BY_TASK[task_id]
+        missing_params = required_params - set(self.params.keys())
+        
+        if missing_params:
+            raise ValueError(
+                f"Для task_id={task_id} отсутствуют следующие обязательные параметры: {sorted(missing_params)}"
+            )
+    
+    @staticmethod
+    def get_required_params(task_id: str) -> Set[str]:
+        """
+        Возвращает множество обязательных параметров для указанного task_id.
+        
+        Args:
+            task_id: идентификатор задачи
+            
+        Returns:
+            Множество имен обязательных параметров
+            
+        Raises:
+            ValueError: если task_id не поддерживается
+        """
+        if task_id not in REQUIRED_PARAMS_BY_TASK:
+            raise ValueError(f"Неподдерживаемый task_id: {task_id}. Допустимые значения: {list(REQUIRED_PARAMS_BY_TASK.keys())}")
+        return REQUIRED_PARAMS_BY_TASK[task_id].copy()
+    
+    @staticmethod
+    def get_inference_params() -> Set[str]:
+        """
+        Возвращает минимальный набор параметров, используемых непосредственно в инференсе.
+        
+        Returns:
+            Множество имен параметров
+        """
+        return INFERENCE_ONLY_PARAMS.copy()
+    
+    def _get_params_for_task(self, task_id: str, user_params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """Возвращает параметры для заданной задачи."""
+        # Начинаем с параметров по умолчанию
         params = DEFAULT_PARAMS_80.copy()
         
-        # Применение настроек для конкретных задач
+        # Переопределяем пользовательскими параметрами
+        if user_params is not None:
+            params.update(user_params)
+        
+        # Применение настроек для конкретных задач (если не переопределено пользователем)
         if task_id == '6':
-            params['dataset'] = 'mic'
-            params['use_salsalite'] = False
-            params['multi_accdoa'] = True
-            params['n_mics'] = 4
+            params.setdefault('dataset', 'mic')
+            params.setdefault('use_salsalite', False)
+            params.setdefault('multi_accdoa', True)
+            params.setdefault('n_mics', 4)
         elif task_id == '4':
-            params['dataset'] = 'mic'
-            params['use_salsalite'] = False
-            params['multi_accdoa'] = False
+            params.setdefault('dataset', 'mic')
+            params.setdefault('use_salsalite', False)
+            params.setdefault('multi_accdoa', False)
         elif task_id == '5':
-            params['dataset'] = 'mic'
-            params['use_salsalite'] = True
-            params['multi_accdoa'] = False
+            params.setdefault('dataset', 'mic')
+            params.setdefault('use_salsalite', True)
+            params.setdefault('multi_accdoa', False)
         elif task_id == '7':
-            params['dataset'] = 'mic'
-            params['use_salsalite'] = True
-            params['multi_accdoa'] = True
+            params.setdefault('dataset', 'mic')
+            params.setdefault('use_salsalite', True)
+            params.setdefault('multi_accdoa', True)
         elif task_id == '2':
-            params['dataset'] = 'foa'
-            params['multi_accdoa'] = False
+            params.setdefault('dataset', 'foa')
+            params.setdefault('multi_accdoa', False)
         elif task_id == '3':
-            params['dataset'] = 'foa'
-            params['multi_accdoa'] = True
+            params.setdefault('dataset', 'foa')
+            params.setdefault('multi_accdoa', True)
         
         _recompute_time_derived(params)
         
@@ -440,7 +597,7 @@ class SELDInference:
         
         # Вычисление количества каналов
         nm = int(params['n_mics'])
-        if params['use_salsalite']:
+        if params.get('use_salsalite', False):
             params['nb_channels'] = 7
         else:
             params['nb_channels'] = nm + (nm * (nm - 1)) // 2
@@ -564,22 +721,54 @@ class SELDInference:
 # =============================================================================
 if __name__ == '__main__':
     import argparse
+    import json
     
     parser = argparse.ArgumentParser(description='Инференс SELDNet модели')
-    parser.add_argument('--weights', type=str, required=True, help='Путь к файлу весов .pth')
+    parser.add_argument('--weights', type=str, required=False, default=None, help='Путь к файлу весов .pth (не требуется при --list-params)')
     parser.add_argument('--scaler', type=str, default=None, help='Путь к файлу скалера .joblib')
-    parser.add_argument('--audio', type=str, required=True, help='Путь к аудиофайлу')
+    parser.add_argument('--audio', type=str, required=False, default=None, help='Путь к аудиофайлу (не требуется при --list-params)')
     parser.add_argument('--output', type=str, default=None, help='Путь к выходному CSV файлу')
     parser.add_argument('--task-id', type=str, default='6', help='ID задачи (по умолчанию 6)')
     parser.add_argument('--threshold', type=float, default=0.5, help='Порог детекции')
     parser.add_argument('--device', type=str, default=None, help='Устройство (cuda/cpu)')
+    parser.add_argument('--params', type=str, default=None, 
+                        help='Путь к JSON файлу с параметрами модели (опционально)')
+    parser.add_argument('--list-params', action='store_true', 
+                        help='Вывести список требуемых параметров для task_id и выйти')
     
     args = parser.parse_args()
+    
+    # Если запрошен список параметров, выводим и выходим
+    if args.list_params:
+        try:
+            required = SELDInference.get_required_params(args.task_id)
+            inference_only = SELDInference.get_inference_params()
+            print(f"Требуемые параметры для task_id={args.task_id}:")
+            for param in sorted(required):
+                print(f"  - {param}")
+            print(f"\nМинимальный набор для инференса ({len(inference_only)} параметров):")
+            for param in sorted(inference_only):
+                print(f"  - {param}")
+        except ValueError as e:
+            print(f"Ошибка: {e}")
+        exit(0)
+    
+    # Проверка обязательных аргументов для режима инференса
+    if not args.weights or not args.audio:
+        parser.error("Для режима инференса требуются аргументы --weights и --audio")
+    
+    # Загрузка пользовательских параметров из JSON файла
+    user_params = None
+    if args.params:
+        with open(args.params, 'r', encoding='utf-8') as f:
+            user_params = json.load(f)
+        print(f"Загружены параметры из {args.params}")
     
     infer = SELDInference(
         weights_path=args.weights,
         scaler_path=args.scaler,
         task_id=args.task_id,
+        params=user_params,
         device=args.device,
         threshold=args.threshold
     )
