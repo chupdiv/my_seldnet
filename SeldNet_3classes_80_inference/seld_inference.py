@@ -13,7 +13,8 @@
         'nb_mel_bins': 256,
         'mel_fmax_hz': 5000.0,
         'n_mics': 4,
-        'unique_classes': 3,
+        'classes_list': ['class_0', 'class_1', 'class_2'],  # список классов
+        'target_class': 0,  # целевой класс (индекс в classes_list)
         'label_sequence_length': 5,
         'dataset': 'mic',
         'use_salsalite': False,
@@ -28,6 +29,7 @@
         'nb_fnn_layers': 1,
         'fnn_size': 128,
     }
+    # unique_classes будет вычислен автоматически как len(classes_list)
     infer = SELDInference(
         weights_path='path/to/weights.pth',
         params=params,
@@ -68,13 +70,14 @@ DEFAULT_PARAMS_80 = dict(
     mel_fmin_hz=0.0,
     mel_fmax_hz=5000.0,
     n_mics=4,
+    classes_list=['class_0', 'class_1', 'class_2'],  # список классов
+    target_class=0,  # целевой класс (индекс в classes_list)
     use_salsalite=False,
     fmin_doa_salsalite=50,
     fmax_doa_salsalite=2000,
     fmax_spectra_salsalite=5000,
     model='seldnet',
     multi_accdoa=True,
-    unique_classes=3,
     label_sequence_length=5,
     dropout_rate=0.05,
     nb_cnn2d_filt=64,
@@ -97,38 +100,38 @@ DEFAULT_PARAMS_80 = dict(
 REQUIRED_PARAMS_BY_TASK: Dict[str, Set[str]] = {
     '2': {  # FOA, single-ACCDOA
         'fs', 'hop_len_s', 'label_hop_len_s', 'nb_mel_bins', 'mel_fmin_hz', 'mel_fmax_hz',
-        'n_mics', 'unique_classes', 'label_sequence_length', 'dataset', 'multi_accdoa',
+        'n_mics', 'classes_list', 'target_class', 'label_sequence_length', 'dataset', 'multi_accdoa',
         'nb_cnn2d_filt', 'f_pool_size', 'dropout_rate', 'nb_heads', 'nb_self_attn_layers',
         'nb_rnn_layers', 'rnn_size', 'nb_fnn_layers', 'fnn_size',
     },
     '3': {  # FOA, multi-ACCDOA
         'fs', 'hop_len_s', 'label_hop_len_s', 'nb_mel_bins', 'mel_fmin_hz', 'mel_fmax_hz',
-        'n_mics', 'unique_classes', 'label_sequence_length', 'dataset', 'multi_accdoa',
+        'n_mics', 'classes_list', 'target_class', 'label_sequence_length', 'dataset', 'multi_accdoa',
         'nb_cnn2d_filt', 'f_pool_size', 'dropout_rate', 'nb_heads', 'nb_self_attn_layers',
         'nb_rnn_layers', 'rnn_size', 'nb_fnn_layers', 'fnn_size',
     },
     '4': {  # MIC, single-ACCDOA
         'fs', 'hop_len_s', 'label_hop_len_s', 'nb_mel_bins', 'mel_fmin_hz', 'mel_fmax_hz',
-        'n_mics', 'unique_classes', 'label_sequence_length', 'dataset', 'multi_accdoa',
+        'n_mics', 'classes_list', 'target_class', 'label_sequence_length', 'dataset', 'multi_accdoa',
         'nb_cnn2d_filt', 'f_pool_size', 'dropout_rate', 'nb_heads', 'nb_self_attn_layers',
         'nb_rnn_layers', 'rnn_size', 'nb_fnn_layers', 'fnn_size',
     },
     '5': {  # MIC, SALSA, single-ACCDOA
         'fs', 'hop_len_s', 'label_hop_len_s', 'nb_mel_bins', 'mel_fmin_hz', 'mel_fmax_hz',
-        'n_mics', 'unique_classes', 'label_sequence_length', 'dataset', 'use_salsalite',
+        'n_mics', 'classes_list', 'target_class', 'label_sequence_length', 'dataset', 'use_salsalite',
         'fmin_doa_salsalite', 'fmax_doa_salsalite', 'fmax_spectra_salsalite', 'multi_accdoa',
         'nb_cnn2d_filt', 'f_pool_size', 'dropout_rate', 'nb_heads', 'nb_self_attn_layers',
         'nb_rnn_layers', 'rnn_size', 'nb_fnn_layers', 'fnn_size',
     },
     '6': {  # MIC, multi-ACCDOA (основная конфигурация SeldNet_3classes_80)
         'fs', 'hop_len_s', 'label_hop_len_s', 'nb_mel_bins', 'mel_fmin_hz', 'mel_fmax_hz',
-        'n_mics', 'unique_classes', 'label_sequence_length', 'dataset', 'multi_accdoa',
+        'n_mics', 'classes_list', 'target_class', 'label_sequence_length', 'dataset', 'multi_accdoa',
         'nb_cnn2d_filt', 'f_pool_size', 'dropout_rate', 'nb_heads', 'nb_self_attn_layers',
         'nb_rnn_layers', 'rnn_size', 'nb_fnn_layers', 'fnn_size',
     },
     '7': {  # MIC, SALSA, multi-ACCDOA
         'fs', 'hop_len_s', 'label_hop_len_s', 'nb_mel_bins', 'mel_fmin_hz', 'mel_fmax_hz',
-        'n_mics', 'unique_classes', 'label_sequence_length', 'dataset', 'use_salsalite',
+        'n_mics', 'classes_list', 'target_class', 'label_sequence_length', 'dataset', 'use_salsalite',
         'fmin_doa_salsalite', 'fmax_doa_salsalite', 'fmax_spectra_salsalite', 'multi_accdoa',
         'nb_cnn2d_filt', 'f_pool_size', 'dropout_rate', 'nb_heads', 'nb_self_attn_layers',
         'nb_rnn_layers', 'rnn_size', 'nb_fnn_layers', 'fnn_size',
@@ -138,7 +141,7 @@ REQUIRED_PARAMS_BY_TASK: Dict[str, Set[str]] = {
 # Параметры, используемые непосредственно в инференсе (минимальный набор)
 INFERENCE_ONLY_PARAMS = {
     'fs', 'hop_len_s', 'label_hop_len_s', 'nb_mel_bins', 'mel_fmin_hz', 'mel_fmax_hz',
-    'n_mics', 'dataset', 'use_salsalite', 'multi_accdoa', 'unique_classes',
+    'n_mics', 'dataset', 'use_salsalite', 'multi_accdoa', 'classes_list', 'target_class',
     'label_sequence_length', 'nb_cnn2d_filt', 'f_pool_size', 'dropout_rate',
     'nb_heads', 'nb_self_attn_layers', 'nb_rnn_layers', 'rnn_size',
     'nb_fnn_layers', 'fnn_size',
@@ -146,11 +149,17 @@ INFERENCE_ONLY_PARAMS = {
 
 
 def _recompute_time_derived(params: Dict[str, Any]) -> None:
-    """Вычисляет производные временные параметры."""
+    """Вычисляет производные временные параметры и unique_classes из classes_list."""
     params['feature_label_resolution'] = int(params['label_hop_len_s'] // params['hop_len_s'])
     params['feature_sequence_length'] = (
         params['label_sequence_length'] * params['feature_label_resolution']
     )
+    # Вычисляем unique_classes как длину classes_list
+    if 'classes_list' in params and isinstance(params['classes_list'], (list, tuple)):
+        params['unique_classes'] = len(params['classes_list'])
+    elif 'unique_classes' not in params:
+        # Если classes_list нет, оставляем unique_classes как есть (для обратной совместимости)
+        pass
 
 
 def nCr(n: int, r: int) -> int:
