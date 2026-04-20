@@ -356,9 +356,15 @@ class FeatureExtractor:
         # Mel filterbank
         fmin_mel = float(params.get('mel_fmin_hz', 0.0))
         fmax_mel = params.get('mel_fmax_hz', None)
-        mel_kw = dict(sr=self._fs, n_fft=self._nfft, n_mels=self._nb_mel_bins, fmin=fmin_mel)
         if fmax_mel is not None:
-            mel_kw['fmax'] = float(fmax_mel)
+            fmax_mel = float(fmax_mel)
+        mel_kw = dict(
+            sr=self._fs, 
+            n_fft=self._nfft, 
+            n_mels=self._nb_mel_bins, 
+            fmin=fmin_mel, 
+            fmax = fmax_mel,
+        )
         self._mel_wts = librosa.filters.mel(**mel_kw).T
         
         # Загрузка скалера
