@@ -144,6 +144,12 @@ class FeatureClass:
         return np.array(spectra).T
     
     def _get_chunks(self, audio_input):
+        # ПРИМЕЧАНИЕ ДЛЯ argv=6: Эта функция используется только при raw_chunks=True.
+        # В стандартном режиме argv=6 (raw_chunks=False) эта функция НЕ вызывается.
+        # Если бы использовалась: нарезает аудио (например, 15-секундный файл) на перекрывающиеся чанки.
+        # Шаг скольжения = self._hop_len (по умолчанию 0.02 сек при fs=250kHz => 5000 отсчётов).
+        # Длина чанка = self._win_len (по умолчанию 2 * hop_len = 0.04 сек).
+        # Таким образом, длинный файл разбивается на множество коротких чанков для извлечения признаков.
 
         chunks = []    
         for s in range(0, len(audio_input), self._hop_len):
@@ -160,6 +166,11 @@ class FeatureClass:
         return np.array(chunks)
     
     def _audio_chunks_from_file(self, audio_path):
+        # ПРИМЕЧАНИЕ ДЛЯ argv=6: Эта функция используется только при raw_chunks=True.
+        # В стандартном режиме argv=6 (raw_chunks=False) эта функция НЕ вызывается.
+        # Если бы использовалась: загружает аудиофайл целиком (например, 15 сек) и разбивает его на чанки
+        # через _get_chunks для каждого канала. Результат — массив чанков [nb_chunks, nb_channels, win_len],
+        # который затем приводится к виду [nb_chunks, nb_channels * win_len] для подачи в модель.
         
         audio_input, fs = self._load_audio(audio_path)
 
@@ -393,6 +404,24 @@ class FeatureClass:
     # ------------------------------- EXTRACT FEATURE AND PREPROCESS IT -------------------------------
 
     def extract_file_feature(self, _arg_in):
+        # ПРИМЕЧАНИЕ ДЛЯ argv=6 (MIC + GCC + multi-ACCDOA):
+        # Обработка 15-секундных файлов происходит следующим образом:
+        # 1. Если raw_chunks=False (стандартный режим для argv=6):
+        #    - Файл загружается целиком через _get_spectrogram_for_file()
+        #    - Вычисляется спектрограмма с hop_len=0.02 сек (5000 отсчётов при fs=250kHz)
+        #    - Для 15-секундного файла: nb_feat_frames = 15 / 0.02 = 750 кадров признаков
+        #    - Извлекаются mel-спектрограммы (_get_mel_spectrogram) и GCC-признаки (_get_gcc)
+        #    - Признаки конкатенируются: feat = [mel_spect, gcc] для каждого кадра
+        #    - Результат сохраняется как .npy файл形状: (750, nb_channels * nb_mel_bins)
+        #      где nb_channels = N_MICS + N_MICS*(N_MICS-1)/2 = 4 + 6 = 10 каналов
+        # 2. На этапе обучения (в DataGenerator._split_in_seqs):
+        #    - Признаки разбиваются на последовательности длиной feature_sequence_length=2 кадра (80 мс)
+        #    - Метки разбиваются на последовательности длиной label_sequence_length=5 кадров (200 мс)
+        #    - Один 15-секундный файл порождает ~375 обучающих примеров для признаков
+        #      и ~150 обучающих примеров для меток
+        # Таким образом, длинные файлы НЕ нарезаются заранее, а разбиваются на батчи
+        # фиксированной длины непосредственно перед подачей в нейросеть.
+        
         _file_cnt, _wav_path, _feat_path = _arg_in
 
         if self.raw_chunks:
