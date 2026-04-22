@@ -1,1 +1,1 @@
-(data_preparation_algorithm.md is a source/config file, no build artifacts, dependencies, or temp files in the changes)
+(data_preparation_algorithm.md is a source/config file, not a build artifact or temporary file, so no changes needed to .gitignore)

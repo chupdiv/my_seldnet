@@ -113,28 +113,42 @@ nb_label_frames = int(len(audio_input) / label_hop)   # label_hop = fs * label_h
 Для каждого из 4 каналов:
 
 ```python
+# Параметры окна и FFT
+win_len = 2 * hop_len                    # 10000 сэмплов (40 мс)
+nfft = next_power_of_2(win_len)          # 16384 (следующая степень двойки для оптимизации)
+
 stft_ch = librosa.core.stft(
     audio_input[:, ch],
-    n_fft=2*hop_len,          # 10000 точек
-    hop_length=hop_len,        # 5000 samples (20 мс)
-    win_length=2*hop_len,      # окно Ханна
+    n_fft=nfft,              # 16384 точек (степень двойки)
+    hop_length=hop_len,      # 5000 samples (20 мс)
+    win_length=win_len,      # 10000 samples (окно Ханна, 50% перекрытие)
     window='hann'
 )
-# Результат: [nb_bins, nb_feat_frames]
+# Результат: [nfft//2 + 1, nb_feat_frames] = [8193, nb_feat_frames]
 ```
+
+**Важные замечания по параметрам STFT:**
+
+- `n_fft` вычисляется как следующая степень двойки от `win_length` для ускорения FFT (в коде: `_next_greater_power_of_2`)
+- `win_length = 2 * hop_len` обеспечивает 50% перекрытие окон (стандартная практика)
+- `label_hop_len_s` должен быть кратен только `hop_len_s`, а не `win_length`:
+  - В данном случае: `label_hop_len_s / hop_len_s = 40/20 = 2` ✓
+  - Совпадение `label_hop_len_s` с длительностью окна (`win_length`) здесь также выполняется (40 мс), но это **не обязательное требование**
+  - Главное условие синхронизации: целочисленное отношение шага меток к шагу STFT (`label_hop_len_s % hop_len_s == 0`)
+  - Даже если `label_hop_len_s` не кратен `win_length`, данные корректно группируются благодаря тому, что каждый лейбл-фрейм охватывает ровно `feature_label_resolution` спектральных кадров
 
 #### 2.4. Извлечение Mel-спектрограммы
 
 ```python
 mel_wts = librosa.filters.mel(
     sr=250000,
-    n_fft=10000,
+    n_fft=nfft,              # 16384 (должно соответствовать n_fft из STFT)
     n_mels=256,
     fmin=0.0,
     fmax=5000.0  # Важно: соответствует lowpass фильтру при генерации
 ).T
 
-mag_spectra = np.abs(stft)**2
+mag_spectra = np.abs(stft_ch)**2
 mel_spectra = np.dot(mag_spectra, mel_wts)
 log_mel_spectra = librosa.power_to_db(mel_spectra)
 ```
