@@ -1077,12 +1077,12 @@ class CMT_block(torch.nn.Module):
 
 
 # =============================================================================
-# CST_former_model.py - основной класс CSTFormer
+# CSTFormer_model.py - основной класс CSTFormer
 # =============================================================================
 
-class CST_former(torch.nn.Module):
+class CSTFormer(torch.nn.Module):
     """
-    CST_former : Channel-Spectral-Temporal Transformer for SELD task
+    CSTFormer : Channel-Spectral-Temporal Transformer for SELD task
     """
     def __init__(self, in_feat_shape, out_shape, params, in_vid_feat_shape=None):
         super().__init__()

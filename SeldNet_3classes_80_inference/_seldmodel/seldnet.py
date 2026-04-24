@@ -106,7 +106,7 @@ class ConvBlock(nn.Module):
         return x
 
 
-class SeldModel(torch.nn.Module):
+class SeldNet(torch.nn.Module):
     def __init__(self, in_feat_shape, out_shape, params, in_vid_feat_shape=None):
         super().__init__()
         self.nb_classes = params['unique_classes']

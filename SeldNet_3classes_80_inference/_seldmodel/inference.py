@@ -57,247 +57,22 @@ import torch.nn.functional as F
 import librosa
 import joblib
 from typing import Any, Dict, List, Optional, Tuple, Set
+import sys
+import ast
 
+from .defaults import DEFAULT_PARAMS_80, DEFAULT_PARAMS_CST, DEFAULT_PARAMS_NGCC,INFERENCE_ONLY_PARAMS,REQUIRED_PARAMS_BY_TASK
 # Импорты архитектур моделей из локального каталога models/
 # Все модели определены в отдельных файлах: seldnet.py, ngcc.py, cst_former.py
-import sys
-from models.seldnet import SeldModel
-from models.ngcc import NGCC_model
-from models.cst_former import CST_former as CSTFormer
+from .seldnet import SeldNet
+from .ngcc import NGCC_model
+from .cstformer import CSTFormer
+from .feature_extractor import FeatureExtractor
 
 
-# =============================================================================
-# Параметры по умолчанию для SeldNet_3classes_80 (Task IDs 2-7)
-# =============================================================================
-DEFAULT_PARAMS_80 = dict(
-    fs=250000,
-    hop_len_s=0.02,
-    label_hop_len_s=0.04,
-    nb_mel_bins=256,
-    mel_fmin_hz=0.0,
-    mel_fmax_hz=5000.0,
-    n_mics=4,
-    classes_list=['class_0', 'class_1', 'class_2'],  # список классов
-    target_class=0,  # целевой класс (индекс в classes_list)
-    use_salsalite=False,
-    fmin_doa_salsalite=50,
-    fmax_doa_salsalite=2000,
-    fmax_spectra_salsalite=5000,
-    model='seldnet',
-    multi_accdoa=True,
-    label_sequence_length=5,
-    dropout_rate=0.05,
-    nb_cnn2d_filt=64,
-    f_pool_size=[4, 4, 2],
-    t_pool_size=[2, 1, 1],
-    nb_heads=8,
-    nb_self_attn_layers=2,
-    nb_rnn_layers=2,
-    rnn_size=128,
-    nb_fnn_layers=1,
-    fnn_size=128,
-    dataset='mic',
-    raw_chunks=False,
-)
 
-
-# =============================================================================
-# Параметры по умолчанию для CSTFormer (Task ID 32, 33, 34, 333)
-# =============================================================================
-DEFAULT_PARAMS_CST = dict(
-    fs=250000,
-    hop_len_s=0.02,
-    label_hop_len_s=0.04,
-    nb_mel_bins=256,
-    mel_fmin_hz=0.0,
-    mel_fmax_hz=5000.0,
-    n_mics=4,
-    classes_list=['class_0', 'class_1', 'class_2'],  # список классов
-    target_class=0,  # целевой класс (индекс в classes_list)
-    model='cstformer',
-    multi_accdoa=True,
-    label_sequence_length=5,
-    dropout_rate=0.1,
-    nb_cnn2d_filt=64,
-    f_pool_size=[4, 4, 2],
-    use_salsalite=False,  # по умолчанию не используем SALSA
-    # Специфичные параметры для Трансформера
-    patch_size=16,
-    num_heads=8,
-    embed_dim=256,
-    num_layers=4,
-    # Параметры для совместимости с SeldModel
-    rnn_size=128,
-    nb_rnn_layers=2,
-    nb_self_attn_layers=2,
-    nb_fnn_layers=1,
-    fnn_size=128,
-    dataset='mic',
-    raw_chunks=False,
-    # CST-specific parameters
-    t_pooling_loc='begin',
-    ChAtten_DCA=False,
-    ChAtten_ULE=False,
-    CMT_block=False,
-    use_ngcc=False,
-    use_mfcc=False,
-    predict_tdoa=False,
-    max_tau=128,
-    ngcc_channels=32,
-    ngcc_out_channels=16,
-    tracks=False,
-    fixed_tdoa=False,
-)
-
-
-# =============================================================================
-# Параметры по умолчанию для NGCC Model (Task ID 9, 10)
-# =============================================================================
-DEFAULT_PARAMS_NGCC = dict(
-    fs=250000,
-    hop_len_s=0.02,
-    label_hop_len_s=0.04,
-    nb_mel_bins=256,
-    mel_fmin_hz=0.0,
-    mel_fmax_hz=5000.0,
-    n_mics=4,
-    classes_list=['class_0', 'class_1', 'class_2'],  # список классов
-    target_class=0,  # целевой класс (индекс в classes_list)
-    model='ngccmodel',
-    multi_accdoa=False,
-    label_sequence_length=5,
-    dropout_rate=0.05,
-    nb_cnn2d_filt=64,
-    f_pool_size=[4, 4, 2],
-    use_salsalite=False,
-    dataset='mic',
-    raw_chunks=False,
-    # NGCC-specific parameters
-    use_ngcc=True,
-    use_mfcc=False,
-    predict_tdoa=False,
-    max_tau=128,
-    ngcc_channels=32,
-    ngcc_out_channels=16,
-    tracks=False,
-    fixed_tdoa=False,
-    # Для совместимости
-    rnn_size=128,
-    nb_rnn_layers=2,
-    nb_heads=8,
-    nb_self_attn_layers=2,
-    nb_fnn_layers=1,
-    fnn_size=128,
-)
-
-
-# =============================================================================
-# Требуемые параметры для каждого task_id
-# =============================================================================
-REQUIRED_PARAMS_BY_TASK: Dict[str, Set[str]] = {
-    '2': {  # FOA, single-ACCDOA
-        'fs', 'hop_len_s', 'label_hop_len_s', 'nb_mel_bins', 'mel_fmin_hz', 'mel_fmax_hz',
-        'n_mics', 'classes_list', 'target_class', 'label_sequence_length', 'dataset', 'multi_accdoa',
-        'nb_cnn2d_filt', 'f_pool_size', 'dropout_rate', 'nb_heads', 'nb_self_attn_layers',
-        'nb_rnn_layers', 'rnn_size', 'nb_fnn_layers', 'fnn_size',
-    },
-    '3': {  # FOA, multi-ACCDOA
-        'fs', 'hop_len_s', 'label_hop_len_s', 'nb_mel_bins', 'mel_fmin_hz', 'mel_fmax_hz',
-        'n_mics', 'classes_list', 'target_class', 'label_sequence_length', 'dataset', 'multi_accdoa',
-        'nb_cnn2d_filt', 'f_pool_size', 'dropout_rate', 'nb_heads', 'nb_self_attn_layers',
-        'nb_rnn_layers', 'rnn_size', 'nb_fnn_layers', 'fnn_size',
-    },
-    '4': {  # MIC, single-ACCDOA
-        'fs', 'hop_len_s', 'label_hop_len_s', 'nb_mel_bins', 'mel_fmin_hz', 'mel_fmax_hz',
-        'n_mics', 'classes_list', 'target_class', 'label_sequence_length', 'dataset', 'multi_accdoa',
-        'nb_cnn2d_filt', 'f_pool_size', 'dropout_rate', 'nb_heads', 'nb_self_attn_layers',
-        'nb_rnn_layers', 'rnn_size', 'nb_fnn_layers', 'fnn_size',
-    },
-    '5': {  # MIC, SALSA, single-ACCDOA
-        'fs', 'hop_len_s', 'label_hop_len_s', 'nb_mel_bins', 'mel_fmin_hz', 'mel_fmax_hz',
-        'n_mics', 'classes_list', 'target_class', 'label_sequence_length', 'dataset', 'use_salsalite',
-        'fmin_doa_salsalite', 'fmax_doa_salsalite', 'fmax_spectra_salsalite', 'multi_accdoa',
-        'nb_cnn2d_filt', 'f_pool_size', 'dropout_rate', 'nb_heads', 'nb_self_attn_layers',
-        'nb_rnn_layers', 'rnn_size', 'nb_fnn_layers', 'fnn_size',
-    },
-    '6': {  # MIC, multi-ACCDOA (основная конфигурация SeldNet_3classes_80)
-        'fs', 'hop_len_s', 'label_hop_len_s', 'nb_mel_bins', 'mel_fmin_hz', 'mel_fmax_hz',
-        'n_mics', 'classes_list', 'target_class', 'label_sequence_length', 'dataset', 'multi_accdoa',
-        'nb_cnn2d_filt', 'f_pool_size', 'dropout_rate', 'nb_heads', 'nb_self_attn_layers',
-        'nb_rnn_layers', 'rnn_size', 'nb_fnn_layers', 'fnn_size',
-    },
-    '7': {  # MIC, SALSA, multi-ACCDOA
-        'fs', 'hop_len_s', 'label_hop_len_s', 'nb_mel_bins', 'mel_fmin_hz', 'mel_fmax_hz',
-        'n_mics', 'classes_list', 'target_class', 'label_sequence_length', 'dataset', 'use_salsalite',
-        'fmin_doa_salsalite', 'fmax_doa_salsalite', 'fmax_spectra_salsalite', 'multi_accdoa',
-        'nb_cnn2d_filt', 'f_pool_size', 'dropout_rate', 'nb_heads', 'nb_self_attn_layers',
-        'nb_rnn_layers', 'rnn_size', 'nb_fnn_layers', 'fnn_size',
-    },
-    '33': {  # CSTFormer - Transformer-based SELD
-        'fs', 'hop_len_s', 'label_hop_len_s', 'nb_mel_bins', 'mel_fmin_hz', 'mel_fmax_hz',
-        'n_mics', 'classes_list', 'target_class', 'label_sequence_length', 'dataset', 'multi_accdoa',
-        'patch_size', 'num_heads', 'embed_dim', 'num_layers', 'dropout_rate',
-        'nb_cnn2d_filt', 'f_pool_size', 'use_salsalite',
-        't_pooling_loc', 'ChAtten_DCA', 'ChAtten_ULE', 'CMT_block',
-        'use_ngcc', 'max_tau', 'ngcc_channels', 'ngcc_out_channels',
-        # Параметры для совместимости с SeldModel (хотя CST может использовать другую архитектуру)
-        'rnn_size', 'nb_rnn_layers', 'nb_heads', 'nb_self_attn_layers', 'nb_fnn_layers', 'fnn_size',
-    },
-    '9': {  # NGCC Model, label_seq=1
-        'fs', 'hop_len_s', 'label_hop_len_s', 'nb_mel_bins', 'mel_fmin_hz', 'mel_fmax_hz',
-        'n_mics', 'classes_list', 'target_class', 'label_sequence_length', 'dataset', 'multi_accdoa',
-        'nb_cnn2d_filt', 'f_pool_size', 'dropout_rate', 'nb_heads', 'nb_self_attn_layers',
-        'nb_rnn_layers', 'rnn_size', 'nb_fnn_layers', 'fnn_size',
-        'use_ngcc', 'max_tau', 'ngcc_channels', 'ngcc_out_channels',
-    },
-    '10': {  # NGCC Model, label_seq=5
-        'fs', 'hop_len_s', 'label_hop_len_s', 'nb_mel_bins', 'mel_fmin_hz', 'mel_fmax_hz',
-        'n_mics', 'classes_list', 'target_class', 'label_sequence_length', 'dataset', 'multi_accdoa',
-        'nb_cnn2d_filt', 'f_pool_size', 'dropout_rate', 'nb_heads', 'nb_self_attn_layers',
-        'nb_rnn_layers', 'rnn_size', 'nb_fnn_layers', 'fnn_size',
-        'use_ngcc', 'max_tau', 'ngcc_channels', 'ngcc_out_channels',
-    },
-    '32': {  # CSTFormer
-        'fs', 'hop_len_s', 'label_hop_len_s', 'nb_mel_bins', 'mel_fmin_hz', 'mel_fmax_hz',
-        'n_mics', 'classes_list', 'target_class', 'label_sequence_length', 'dataset', 'multi_accdoa',
-        'patch_size', 'num_heads', 'embed_dim', 'num_layers', 'dropout_rate',
-        'nb_cnn2d_filt', 'f_pool_size', 'use_salsalite',
-        't_pooling_loc', 'ChAtten_DCA', 'ChAtten_ULE', 'CMT_block',
-        'use_ngcc', 'max_tau', 'ngcc_channels', 'ngcc_out_channels',
-        # Параметры для совместимости
-        'rnn_size', 'nb_rnn_layers', 'nb_heads', 'nb_self_attn_layers', 'nb_fnn_layers', 'fnn_size',
-    },
-    '34': {  # CSTFormer variant
-        'fs', 'hop_len_s', 'label_hop_len_s', 'nb_mel_bins', 'mel_fmin_hz', 'mel_fmax_hz',
-        'n_mics', 'classes_list', 'target_class', 'label_sequence_length', 'dataset', 'multi_accdoa',
-        'patch_size', 'num_heads', 'embed_dim', 'num_layers', 'dropout_rate',
-        'nb_cnn2d_filt', 'f_pool_size', 'use_salsalite',
-        't_pooling_loc', 'ChAtten_DCA', 'ChAtten_ULE', 'CMT_block',
-        'use_ngcc', 'max_tau', 'ngcc_channels', 'ngcc_out_channels',
-        # Параметры для совместимости
-        'rnn_size', 'nb_rnn_layers', 'nb_heads', 'nb_self_attn_layers', 'nb_fnn_layers', 'fnn_size',
-    },
-    '333': {  # CSTFormer variant
-        'fs', 'hop_len_s', 'label_hop_len_s', 'nb_mel_bins', 'mel_fmin_hz', 'mel_fmax_hz',
-        'n_mics', 'classes_list', 'target_class', 'label_sequence_length', 'dataset', 'multi_accdoa',
-        'patch_size', 'num_heads', 'embed_dim', 'num_layers', 'dropout_rate',
-        'nb_cnn2d_filt', 'f_pool_size', 'use_salsalite',
-        't_pooling_loc', 'ChAtten_DCA', 'ChAtten_ULE', 'CMT_block',
-        'use_ngcc', 'max_tau', 'ngcc_channels', 'ngcc_out_channels',
-        # Параметры для совместимости
-        'rnn_size', 'nb_rnn_layers', 'nb_heads', 'nb_self_attn_layers', 'nb_fnn_layers', 'fnn_size',
-    },
-}
-
-# Параметры, используемые непосредственно в инференсе (минимальный набор)
-INFERENCE_ONLY_PARAMS = {
-    'fs', 'hop_len_s', 'label_hop_len_s', 'nb_mel_bins', 'mel_fmin_hz', 'mel_fmax_hz',
-    'n_mics', 'dataset', 'use_salsalite', 'multi_accdoa', 'classes_list', 'target_class',
-    'label_sequence_length', 'nb_cnn2d_filt', 'f_pool_size', 'dropout_rate',
-    'nb_heads', 'nb_self_attn_layers', 'nb_rnn_layers', 'rnn_size',
-    'nb_fnn_layers', 'fnn_size',
-}
-
+import json
+import numpy as np
+from typing import Dict, Any, Optional, List
 
 def _recompute_time_derived(params: Dict[str, Any]) -> None:
     """Вычисляет производные временные параметры и unique_classes из classes_list."""
@@ -311,168 +86,6 @@ def _recompute_time_derived(params: Dict[str, Any]) -> None:
     elif 'unique_classes' not in params:
         # Если classes_list нет, оставляем unique_classes как есть (для обратной совместимости)
         pass
-
-
-def nCr(n: int, r: int) -> int:
-    """Биномиальный коэффициент."""
-    return math.factorial(n) // math.factorial(r) // math.factorial(n - r)
-
-
-# =============================================================================
-# Модели нейронной сети
-# =============================================================================
-class ConvBlock(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1)):
-        super().__init__()
-        self.conv = nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=kernel_size, stride=stride, padding=padding)
-        self.bn = nn.BatchNorm2d(out_channels)
-
-    def forward(self, x):
-        x = F.relu(self.bn(self.conv(x)))
-        return x
-
-
-# =============================================================================
-# Извлечение признаков
-# =============================================================================
-class FeatureExtractor:
-    """Класс для извлечения и нормализации признаков из аудио."""
-    
-    def __init__(self, params: Dict[str, Any], scaler_path: Optional[str] = None):
-        self._fs = params['fs']
-        self._hop_len_s = params['hop_len_s']
-        self._label_hop_len_s = params['label_hop_len_s']
-        self._hop_len = int(self._fs * self._hop_len_s)
-        self._label_hop_len = int(self._fs * self._label_hop_len_s)
-        self._win_len = 2 * self._hop_len
-        self._nfft = self._next_greater_power_of_2(self._win_len)
-        self._nb_mel_bins = params['nb_mel_bins']
-        self._dataset = params['dataset']
-        self._use_salsalite = params.get('use_salsalite', False)
-        self._multi_accdoa = params.get('multi_accdoa', True)
-        self._nb_unique_classes = params['unique_classes']
-        self._n_mics = params['n_mics']
-        
-        # Mel filterbank
-        fmin_mel = float(params.get('mel_fmin_hz', 0.0))
-        fmax_mel = params.get('mel_fmax_hz', None)
-        if fmax_mel is not None:
-            fmax_mel = float(fmax_mel)
-        mel_kw = dict(
-            sr=self._fs, 
-            n_fft=self._nfft, 
-            n_mels=self._nb_mel_bins, 
-            fmin=fmin_mel, 
-            fmax = fmax_mel,
-        )
-        self._mel_wts = librosa.filters.mel(**mel_kw).T
-        
-        # Загрузка скалера
-        self._scaler = None
-        if scaler_path is not None and os.path.exists(scaler_path):
-            self._scaler = joblib.load(scaler_path)
-    
-    @staticmethod
-    def _next_greater_power_of_2(x: int) -> int:
-        return 2 ** (x - 1).bit_length()
-    
-    def _load_audio(self, audio_path: str) -> Tuple[np.ndarray, int]:
-        """Загружает аудиофайл и возвращает сигнал и частоту дискретизации."""
-        audio, fs = librosa.load(audio_path, sr=self._fs, mono=False)
-        if audio.ndim == 1:
-            audio = audio[np.newaxis, :]
-        audio = audio.T  # (samples, channels)
-        return audio, fs
-    
-    def _spectrogram(self, audio_input: np.ndarray, _nb_frames: int) -> np.ndarray:
-        """Вычисляет спектрограмму для каждого канала."""
-        _nb_ch = audio_input.shape[1]
-        spectra = []
-        for ch_cnt in range(_nb_ch):
-            stft_ch = librosa.core.stft(
-                np.asfortranarray(audio_input[:, ch_cnt]),
-                n_fft=self._nfft,
-                hop_length=self._hop_len,
-                win_length=self._win_len,
-                window='hann'
-            )
-            spectra.append(stft_ch[:, :_nb_frames])
-        return np.array(spectra).T
-    
-    def _get_mel_spectrogram(self, linear_spectra: np.ndarray) -> np.ndarray:
-        """Преобразует линейную спектрограмму в мел-спектрограмму."""
-        mel_feat = np.zeros((linear_spectra.shape[0], self._nb_mel_bins, linear_spectra.shape[-1]))
-        for ch_cnt in range(linear_spectra.shape[-1]):
-            mag_spectra = np.abs(linear_spectra[:, :, ch_cnt])**2
-            mel_spectra = np.dot(mag_spectra, self._mel_wts)
-            log_mel_spectra = librosa.power_to_db(mel_spectra)
-            mel_feat[:, :, ch_cnt] = log_mel_spectra
-        mel_feat = mel_feat.transpose((0, 2, 1)).reshape((linear_spectra.shape[0], -1))
-        return mel_feat
-    
-    def _get_gcc(self, linear_spectra: np.ndarray) -> np.ndarray:
-        """Вычисляет GCC-PHAT признаки для пар микрофонов."""
-        gcc_channels = nCr(linear_spectra.shape[-1], 2)
-        gcc_feat = np.zeros((linear_spectra.shape[0], self._nb_mel_bins, gcc_channels))
-        cnt = 0
-        for m in range(linear_spectra.shape[-1]):
-            for n in range(m+1, linear_spectra.shape[-1]):
-                R = np.conj(linear_spectra[:, :, m]) * linear_spectra[:, :, n]
-                cc = np.fft.irfft(np.exp(1.j*np.angle(R)))
-                cc = np.concatenate((cc[:, -self._nb_mel_bins//2:], cc[:, :self._nb_mel_bins//2]), axis=-1)
-                gcc_feat[:, :, cnt] = cc
-                cnt += 1
-        return gcc_feat.transpose((0, 2, 1)).reshape((linear_spectra.shape[0], -1))
-    
-    def extract_features(self, audio_path: str) -> np.ndarray:
-        """Извлекает признаки из аудиофайла."""
-        audio_input, fs = self._load_audio(audio_path)
-        nb_feat_frames = int(len(audio_input) / float(self._hop_len))
-        
-        spect = self._spectrogram(audio_input, nb_feat_frames)
-        mel_spect = self._get_mel_spectrogram(spect)
-        
-        if self._dataset == 'mic' and not self._use_salsalite:
-            gcc = self._get_gcc(spect)
-            feat = np.concatenate((mel_spect, gcc), axis=-1)
-        else:
-            feat = mel_spect
-        
-        # Нормализация
-        if self._scaler is not None:
-            feat = self._scaler.transform(feat)
-        
-        return feat
-    
-    def reshape_features_for_model(self, feat: np.ndarray) -> np.ndarray:
-        """Формирует батчи для подачи в модель."""
-        # Определяем размерность признака на один фрейм
-        feat_per_frame = feat.shape[1] if feat.ndim == 3 else feat.shape[-1]
-        
-        # Вычисляем количество feature frames на label frame
-        feature_label_resolution = int(self._label_hop_len // self._hop_len)
-        feature_sequence_length = 5 * feature_label_resolution  # label_sequence_length=5
-        
-        # Обрезаем до кратного feature_sequence_length
-        nb_frames = feat.shape[0]
-        nb_chunks = nb_frames // feature_sequence_length
-        
-        if nb_chunks == 0:
-            # Если аудио слишком короткое, дополняем нулями
-            pad_len = feature_sequence_length - nb_frames
-            feat = np.pad(feat, ((0, pad_len), (0, 0)), mode='constant')
-            nb_chunks = 1
-        
-        feat = feat[:nb_chunks * feature_sequence_length]
-        
-        # Reshape: (nb_chunks, feature_sequence_length, feat_dim)
-        feat = feat.reshape((nb_chunks, feature_sequence_length, -1))
-        
-        # Transpose для модели: (batch, channels, time, freq)
-        # Приводим к виду (batch, channels=1, time=feature_sequence_length, freq=feat_dim)
-        feat = feat[:, np.newaxis, :, :]
-        
-        return feat.astype(np.float32)
 
 
 # =============================================================================
@@ -561,7 +174,6 @@ class SELDInference:
         task_id: str = '6',
         params: Optional[Dict[str, Any]] = None,
         device: Optional[str] = None,
-        threshold: float = 0.5
     ):
         """
         Args:
@@ -573,7 +185,6 @@ class SELDInference:
             device: устройство для вычислений ('cuda', 'cpu', или None для автовыбора)
             threshold: порог активности для детекции событий
         """
-        self.threshold = threshold
         
         # Выбор устройства
         if device is None:
@@ -756,7 +367,7 @@ class SELDInference:
             model = NGCC_model(in_feat_shape, out_shape, self.params)
         else:
             # Стандартная SeldNet архитектура
-            model = SeldModel(in_feat_shape, out_shape, self.params)
+            model = SeldNet(in_feat_shape, out_shape, self.params)
         
         # Загрузка весов
         if os.path.exists(weights_path):
@@ -767,7 +378,7 @@ class SELDInference:
         
         return model
     
-    def infer(self, audio_path: str) -> List[Dict]:
+    def infer(self, audio_arr, threshold:float=0.0) -> List[Dict]:
         """
         Выполняет инференс для аудиофайла.
         
@@ -780,7 +391,7 @@ class SELDInference:
                               'azimuth': float, 'elevation': float}, ...]
         """
         # Извлечение признаков
-        feat = self.feature_extractor.extract_features(audio_path)
+        feat = self.feature_extractor.extract_features(audio_arr)
         
         # Формирование батча
         feat_batch = self.feature_extractor.reshape_features_for_model(feat)
@@ -795,7 +406,7 @@ class SELDInference:
         # output имеет форму (batch, time_steps, tracks*4*classes)
         output = output.reshape((-1, output.shape[-1]))  # (batch*time_steps, tracks*4*classes)
         
-        detections = decode_multi_accdoa_output(output, threshold=self.threshold)
+        detections = decode_multi_accdoa_output(output, threshold = threshold)
         
         # Добавление полярных координат
         for det in detections:
@@ -816,7 +427,9 @@ class SELDInference:
         Returns:
             Строка с результатами в формате CSV
         """
-        detections = self.infer(audio_path)
+        audio_input, fs = self._load_audio(audio_path)
+
+        detections = self.infer(audio_input)
         
         # Формирование строк CSV
         lines = []
