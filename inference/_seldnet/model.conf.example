@@ -1,0 +1,27 @@
+# Скопируйте в каталог модели как model.conf и подставьте пути к файлам.
+# ngcc_seld_task — номер задачи из ngcc-seld parameters.py (например 6 = MIC+GCC+multi-ACCDOA).
+# Остальные [params] переопределяют базу задачи.
+
+[tags]
+caption = SELDnet DCASE
+description = Локализация (ngcc-seld task 6)
+class = SELDNet
+type = localizer
+order = 10
+
+[files]
+model = weights.pth
+scaler = scaler.joblib
+
+[params]
+ngcc_seld_task = 6
+# Переопределения под вашу установку (пример):
+# fs = 24000
+# n_mics = 5
+# hop_len_s = 0.02
+# label_hop_len_s = 0.1
+# classes_list = ["class_0", "class_1", "Drone"]
+# unique_classes = 13
+# target_class = 0
+# use_salsalite = False
+# use_fsgcc = False
