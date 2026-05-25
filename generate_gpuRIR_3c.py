@@ -23,18 +23,18 @@ gpuRIR.activateLUT(True)              # Включить таблицу поис
 
 # ---------------------------- BASE CONFIG PARAMS ----------------------------
 OUT_PREFIX = "20260405"
-FS = 44100
+FS = 250000
 LOWPASS = 5000
 MAX_DURATION_SEC = 15 # cекунд
 FILES_COUNT = 2000 
-N_MICS = 5
+N_MICS = 4
 
 # ---------------------------- INPUT PATHS ----------------------------
 CURRENT_DIR = Path.cwd()
 DATASETS_PATH  = CURRENT_DIR / "../datasets/seld_data"
 ENV_DATASET_PATH = DATASETS_PATH / "DataSED/SED_wav"
 ENV_CSV_PATH = DATASETS_PATH / "DataSED/SED_ground_truth/Polyphonic_sound_detection.csv"
-DRONE_PATH_TRAIN = DATASETS_PATH / "drone_sounds_250kHz"
+DRONE_PATH_TRAIN = DATASETS_PATH / f"drone_sounds"
 DRONE_PATH_TEST = DATASETS_PATH / "drone_sounds_test"
 
 VOICE_JSON_PATH = DATASETS_PATH / "Hifitts/hifitts_clean.json"
@@ -45,10 +45,6 @@ VOICE_DATASET_PATH = DATASETS_PATH / "Hifitts/hifitts_clean"
 OUTPUT_DIR = DATASETS_PATH / f"reverb_all_inclusive_voice_fs{FS}Hz_{N_MICS}mics"
 AUDIO_DIR = OUTPUT_DIR / "mic_dev"
 META_DIR = OUTPUT_DIR / "metadata_dev"
-
-AUDIO_DIR.mkdir(parents=True, exist_ok=True)
-META_DIR.mkdir(parents=True, exist_ok=True)
-
 
 # ---------------------------- CONFIG  ----------------------------
 # Доля обучающей выборки
@@ -240,14 +236,20 @@ def write_soundfile(fname, y, fs):
     sf.write(fname, y, fs, format="WAV", subtype="FLOAT")
 
 def read_soundfile(fname, dtype = 'float32'):
-    y, fs = sf.read(fname, dtype=dtype)
+    try:
+        y, fs = sf.read(fname, dtype=dtype)
+    except Exception as e:
+        print(f"ОШИБКА ЧТЕНИЯ (пропускаем): {fname} — {e}")
+        return None, None, None
     if y.ndim > 1:
         y = y[:, 0]
     nyq = fs / 2.0
     max_duration = int(MAX_DURATION_SEC*fs)
+    crop_start_samples = 0
     if max_duration < y.shape[0]:
         max_start = y.shape[0]- max_duration
-        start = np.random.randint(0, max_start)
+        start = np.random.randint(0, max_start + 1)
+        crop_start_samples = int(start)
         y = y[start:start+max_duration]
 
     if fs != FS:
@@ -262,7 +264,8 @@ def read_soundfile(fname, dtype = 'float32'):
 
     # Нормирование к энергетике 1
     y = y / (rms(y) + 1e-12)
-    return y, FS
+    crop_start_sec = crop_start_samples / float(fs)
+    return y, FS, crop_start_sec
 
 
 # Выдернул функцию из GPURIR и сделал затычку через signal, так как ругается на память (хотя реально занимает 10%)
@@ -434,7 +437,7 @@ def interpolate_trajectory_gpu(traj, signal_len, hop, fs=None):
     positions = (1 - t)[:, np.newaxis] * p_start + t[:, np.newaxis] * p_end
     return positions, target_times
 
-def calculate_RIRS(sp_path, room_dims, beta, max_n_rirs, receiver_positions, fs):
+def calculate_RIRS(sp_path, room_dims, beta, max_n_rirs, receiver_positions, fs, c):
     """
     Расчёт Room Impulse Responses с помощью gpuRIR.
     
@@ -461,8 +464,6 @@ def calculate_RIRS(sp_path, room_dims, beta, max_n_rirs, receiver_positions, fs)
 
     n_points = sp_path.shape[0]
     RIRs = None
-    air_temperatue = np.random.uniform(low=AIR_TEMPERATURE_MIN, high=AIR_TEMPERATURE_MAX)
-    c = sound_speed(air_temperatue)
     for i in range(0, n_points, CHUNK_SIZE):
         chunk = sp_path[i:i+CHUNK_SIZE]
         chunk_RIRs = gpuRIR.simulateRIR(
@@ -476,7 +477,7 @@ def calculate_RIRS(sp_path, room_dims, beta, max_n_rirs, receiver_positions, fs)
             Tdiff=Tdiff,
             orV_rcv=MIC_ORIENTATION,
             mic_pattern=MIC_PATTERN,
-            c = c,
+            c=c,
         )
         if RIRs is None:
             RIRs_shape = list(chunk_RIRs.shape)
@@ -487,7 +488,21 @@ def calculate_RIRS(sp_path, room_dims, beta, max_n_rirs, receiver_positions, fs)
     return RIRs
 
 
-def render_source(x, fs, traj, room_dim, mic_xyz):
+def sample_scene_acoustics():
+    """Sample one consistent acoustic setup for a scene."""
+    reflectivity = np.random.uniform(0.5, 0.8)
+    beta = np.full(6, reflectivity, dtype=np.float32)
+    air_temperature = np.random.uniform(low=AIR_TEMPERATURE_MIN, high=AIR_TEMPERATURE_MAX)
+    c = sound_speed(air_temperature)
+    max_n_rirs = np.full((3,), MAX_RIRS_LENGTH)
+    return {
+        "beta": beta,
+        "c": c,
+        "max_n_rirs": max_n_rirs,
+    }
+
+
+def render_source(x, fs, traj, room_dim, mic_xyz, scene_acoustics=None):
     """Render a single source with reverb using gpuRIR.
     Args:
         x (np.ndarray): Mono source signal.
@@ -516,13 +531,14 @@ def render_source(x, fs, traj, room_dim, mic_xyz):
         fs
     )
     
-    # Параметры отражения стен (типичная комната)
-    reflectivity = np.random.uniform(0.5, 0.8)
-    beta = np.full(6, reflectivity)
-    max_n_rirs = np.full((3,), MAX_RIRS_LENGTH)
+    if scene_acoustics is None:
+        scene_acoustics = sample_scene_acoustics()
+    beta = scene_acoustics["beta"]
+    max_n_rirs = scene_acoustics["max_n_rirs"]
+    c = scene_acoustics["c"]
     
     # Рассчитываем RIR
-    RIRs = calculate_RIRS(sp_path, room_dim, beta, max_n_rirs, mic_xyz, fs)
+    RIRs = calculate_RIRS(sp_path, room_dim, beta, max_n_rirs, mic_xyz, fs, c)
     
     # Очищаем кэш GPU
     torch.cuda.empty_cache()
@@ -775,7 +791,7 @@ def rms(x):
 
 def level_scale(y, peak_target):
     p = float(np.max(np.abs(y)))
-    y = y * (peak_target / p)
+    y = y * (peak_target / (p + 1e-10))
     return y.astype(np.float32)
 
 
@@ -786,7 +802,7 @@ def limit_float_wav_peak(y, peak_target=None):
     y = np.asarray(y, dtype=np.float32)
     p = float(np.max(np.abs(y)))
     if p > peak_target:
-        y = y * (peak_target / p)
+        y = y * (peak_target / (p+1e-10))
     return y.astype(np.float32)
 
 
@@ -806,6 +822,24 @@ def active_interval_mask(n_samples, fs, events):
         if i1 > i0:
             mask[i0:i1] = True
     return mask
+
+
+def shift_and_clip_events(events, classes, crop_start_sec, duration_sec):
+    """Shift events to cropped timeline and clip to [0, duration_sec]."""
+    shifted_events = []
+    shifted_classes = []
+    if events is None or classes is None:
+        return shifted_events, shifted_classes
+
+    for (start, end), class_name in zip(events, classes):
+        s = float(start) - float(crop_start_sec)
+        e = float(end) - float(crop_start_sec)
+        s = max(0.0, s)
+        e = min(float(duration_sec), e)
+        if e > s:
+            shifted_events.append([s, e])
+            shifted_classes.append(class_name)
+    return shifted_events, shifted_classes
 
 
 def mix_drone_and_environment(y_drone, y_env, fs, events, snr_db):
@@ -973,6 +1007,14 @@ def main():
         raise RuntimeError(
             f"Не найдено ни одного .wav дронов в {drone_directory_train} и {drone_directory_test}"
         )
+    elif not drone_train:
+        raise RuntimeError(
+            f"Не найдено ни одного .wav дронов в {drone_directory_train}"
+        )
+    elif not drone_test:
+        print(f"Используются .wav дронов из {drone_directory_train}")
+    else:
+        print(f"Используются .wav дронов из {drone_directory_train} и {drone_directory_test}")
         
     for counter in tqdm(range(FILES_COUNT)):
 
@@ -988,7 +1030,9 @@ def main():
                 continue
             print(f"Файл: {fname}")
 
-            x_drone, fs = read_soundfile(fname, dtype="float32")
+            x_drone, fs, _ = read_soundfile(fname, dtype="float32")
+            if fs is None:
+                continue
 
             room_dim = random_room_dim()
             mic_center = np.asarray(random_position(room_dim), dtype=np.float64)
@@ -998,7 +1042,8 @@ def main():
             drone_traj = generate_linear_trajectory(duration, room_dim)
 
             # Генерация многоканального аудио
-            y = render_source(x_drone, fs, drone_traj, room_dim, mic_xyz)
+            scene_acoustics = sample_scene_acoustics()
+            y = render_source(x_drone, fs, drone_traj, room_dim, mic_xyz, scene_acoustics=scene_acoustics)
 
             # Масштабирование итогового сигнала
             peak_target = random.uniform(FLOAT_WAV_PEAK_TARGET_MIN, FLOAT_WAV_PEAK_TARGET_MAX)
@@ -1028,10 +1073,24 @@ def main():
             rvoice = random.random()        
             if rvoice <= VOICE_PROB:
                 cur_environ_file = random.choice(voice_files)
-                x_environ, fs = read_soundfile(Path(VOICE_DATASET_PATH) / cur_environ_file["file"], dtype="float32")
+                x_environ, fs, env_crop_start_sec = read_soundfile(Path(VOICE_DATASET_PATH) / cur_environ_file["file"], dtype="float32")
+                if fs is None:
+                    continue
             else:            
                 cur_environ_file = random.choice(good_env_files)
-                x_environ, fs = read_soundfile(Path(ENV_DATASET_PATH) / cur_environ_file["file"], dtype="float32")                
+                x_environ, fs, env_crop_start_sec = read_soundfile(Path(ENV_DATASET_PATH) / cur_environ_file["file"], dtype="float32")
+                if fs is None:
+                    continue
+
+            env_events, env_classes = shift_and_clip_events(
+                cur_environ_file["events"],
+                cur_environ_file["classes"],
+                env_crop_start_sec,
+                len(x_environ) / fs,
+            )
+            if not env_events:
+                print("После кропа в файле environment не осталось активных событий, пропускаем его.\n")
+                continue
             
             print(f'Файл: {cur_environ_file["file"]}')
 
@@ -1043,9 +1102,10 @@ def main():
             environ_traj = generate_linear_trajectory(duration, room_dim)
 
             # Генерация многоканального аудио
-            y = render_source(x_environ, fs, environ_traj, room_dim, mic_xyz)
+            scene_acoustics = sample_scene_acoustics()
+            y = render_source(x_environ, fs, environ_traj, room_dim, mic_xyz, scene_acoustics=scene_acoustics)
 
-            y_cut = cut_audio_by_intervals(y, fs, cur_environ_file["events"])
+            y_cut = cut_audio_by_intervals(y, fs, env_events)
 
             # Пропускаем файлы в которых много тишины
             if has_silence(y_cut, fs):
@@ -1056,7 +1116,7 @@ def main():
             peak_target = random.uniform(FLOAT_WAV_PEAK_TARGET_MIN, FLOAT_WAV_PEAK_TARGET_MAX)
             y = level_scale(y, peak_target=peak_target)
 
-            annotations = generate_annotations_single(environ_traj, mic_center, class_index=1, events=cur_environ_file["events"], classes=cur_environ_file["classes"])
+            annotations = generate_annotations_single(environ_traj, mic_center, class_index=1, events=env_events, classes=env_classes)
 
             # В train пишем TRAIN_FRACTION файлов
             r = random.random()
@@ -1077,10 +1137,24 @@ def main():
             rvoice = random.random()            
             if rvoice <= VOICE_PROB:
                 cur_environ_file = random.choice(voice_files)
-                x_environ, fs_env = read_soundfile(Path(VOICE_DATASET_PATH) / cur_environ_file["file"], dtype="float32")
+                x_environ, fs, env_crop_start_sec = read_soundfile(Path(VOICE_DATASET_PATH) / cur_environ_file["file"], dtype="float32")
+                if fs is None:
+                    continue
             else:            
                 cur_environ_file = random.choice(good_env_files)
-                x_environ, fs_env = read_soundfile(Path(ENV_DATASET_PATH) / cur_environ_file["file"], dtype="float32")                
+                x_environ, fs, env_crop_start_sec = read_soundfile(Path(ENV_DATASET_PATH) / cur_environ_file["file"], dtype="float32")
+                if fs is None:
+                    continue
+
+            env_events, env_classes = shift_and_clip_events(
+                cur_environ_file["events"],
+                cur_environ_file["classes"],
+                env_crop_start_sec,
+                len(x_environ) / fs,
+            )
+            if not env_events:
+                print("После кропа в файле environment не осталось активных событий, пропускаем его.\n")
+                continue
 
             r_split = random.random()
             is_train_split = r_split <= TRAIN_FRACTION
@@ -1088,12 +1162,15 @@ def main():
             if drone_path is None:
                 print("Нет файлов дронов для выбранного split, пропуск.\n")
                 continue
-            x_drone, fs = read_soundfile(drone_path, dtype="float32")
+            x_drone, fs, _ = read_soundfile(drone_path, dtype="float32")
+            if fs is None:
+                continue
             print(f"Файлы: БПЛА {drone_path}, окружение {cur_environ_file['file']}")
 
             room_dim = random_room_dim()
             mic_center = np.asarray(random_position(room_dim), dtype=np.float64)
             mic_xyz = MIC_POS_FIXED + mic_center
+            scene_acoustics = sample_scene_acoustics()
 
             duration_environ = len(x_environ) / fs
             duration_drone = len(x_drone) / fs
@@ -1107,29 +1184,29 @@ def main():
             environ_traj = generate_linear_trajectory(min_duration, room_dim)
             drone_traj = generate_linear_trajectory(min_duration, room_dim)
 
-            y_environ = render_source(x_environ, fs, environ_traj, room_dim, mic_xyz)
-            y_cut = cut_audio_by_intervals(y_environ, fs, cur_environ_file["events"])
+            y_environ = render_source(x_environ, fs, environ_traj, room_dim, mic_xyz, scene_acoustics=scene_acoustics)
+            y_cut = cut_audio_by_intervals(y_environ, fs, env_events)
 
             # Пропускаем файлы в которых много тишины
             if has_silence(y_cut, fs):
                 print(f"В файле environment {cur_environ_file['file']} много тишины, пропускаем его.\n")
                 continue
 
-            y_drone = render_source(x_drone, fs, drone_traj, room_dim, mic_xyz)
+            y_drone = render_source(x_drone, fs, drone_traj, room_dim, mic_xyz, scene_acoustics=scene_acoustics)
             if has_silence(y_drone, fs):
                 print("В файле drone много тишины, пропускаем его.\n")
                 continue
 
             target_snr_db = random.uniform(SNR_MIN_DB, SNR_MAX_DB)
             y = mix_drone_and_environment(
-                y_drone, y_environ, fs, cur_environ_file["events"], target_snr_db
+                y_drone, y_environ, fs, env_events, target_snr_db
             )
 
             # Масштабирование итогового сигнала
             peak_target = random.uniform(FLOAT_WAV_PEAK_TARGET_MIN, FLOAT_WAV_PEAK_TARGET_MAX)
             y = level_scale(y, peak_target=peak_target)
 
-            annotations = generate_annotations_both(drone_traj, environ_traj, mic_center, events=cur_environ_file["events"], classes=cur_environ_file["classes"])
+            annotations = generate_annotations_both(drone_traj, environ_traj, mic_center, events=env_events, classes=env_classes)
 
             if is_train_split:
                 name = f"fold3_{OUT_PREFIX}_both_{counter}"
