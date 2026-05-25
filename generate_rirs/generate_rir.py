@@ -10,7 +10,9 @@ from render import (
     annotate_trajectory, 
     normalize_to_random_rms,
     normalize_rms, 
-    clipping,
+    limit_float_wav_peak,
+    scale_to_target_peak,
+    is_silent,
 )
 
 from tools import (
@@ -71,41 +73,61 @@ def make_single_signal(elem, label, cfg, rng=None, aug_pipeline=None):
 
 
 def mix_signals(elem, cfg, rng=None, aug_pipeline=None):
+    """Смикшировать сигналы от активных источников с контролем SNR и пикового уровня.
+    
+    Исправления по сравнению с оригинальной версией:
+    1. Нормализация RMS применяется к каждому источнику ДО микширования (не после)
+    2. Сохраняется относительная энергетика источников через коэффициенты levels
+    3. Итоговый сигнал масштабируется к целевому пику (не просто clipping)
+    4. Добавлена проверка на тишину
+    """
     signal = None
     trajectories = []
     description = {}
+    
     for label, conf in cfg['classes_configs'].items():
         i = conf['index']
         active = elem['sample'][i]
         if active:
             y_mult, ann, info, traj = make_single_signal(elem, label, cfg, rng, aug_pipeline)
+            
+            # Нормализация каждого источника к единичному RMS перед микшированием
+            # Это сохраняет относительную энергетику при последующем масштабировании coef
+            y_mult = normalize_rms(y_mult, sigma=1.0)
+            
             description[label] = info 
             trajectories += annotate_trajectory(label, traj, ann, cfg['classes_configs'])
 
             coef = elem['levels'][i]
             if signal is None:
                 signal = coef * y_mult
-                l_signal= len(signal)
+                l_signal = len(signal)
             else:
                 l_signal = min(len(signal), len(y_mult))
                 signal = signal[:l_signal, :] + coef * y_mult[:l_signal, :]
 
-    # Приведение к целевой RMS
-    if cfg["rms_normalize"]:
-        signal, sigma = normalize_to_random_rms(
-            y = signal, 
-            rms_min=cfg['rms_min'], 
-            rms_max=cfg['rms_max'], 
-            rng = rng,
-        )
-    signal = filtering(signal, cfg['fs'], cfg['lowpass'] )
-    signal = clipping(signal)
+    # Проверка на тишину
+    if signal is None or is_silent(signal, threshold=0.001):
+        # Создаём тихий сигнал вместо пустого
+        signal = np.zeros((l_signal, cfg['n_mics']), dtype=np.float32)
+    
+    # Масштабирование к целевому пику вместо простого clipping
+    # Это обеспечивает адекватный уровень сигнала для обучения
+    signal = scale_to_target_peak(
+        signal,
+        peak_target_min=cfg.get('peak_target_min', 0.10),
+        peak_target_max=cfg.get('peak_target_max', 0.98),
+        rng=rng,
+    )
+    
+    # Финальный lowpass фильтр и ограничение пика (защита от клиппинга)
+    signal = filtering(signal, cfg['fs'], cfg['lowpass'])
+    signal = limit_float_wav_peak(signal, peak_target=0.98)
 
-    elem['rms'] = sigma
     elem['description'] = description
     elem['duration'] = l_signal / cfg['fs']
 
-    trajectories.sort(key = lambda x: x[3])
+    trajectories.sort(key=lambda x: x[3])
     trajectories = np.asarray(trajectories, dtype=np.float32)
     return signal, trajectories
 
