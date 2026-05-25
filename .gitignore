@@ -1,1 +1,36 @@
-Nothing needs to be added to .gitignore since only a Python test file was added without any build artifacts, dependencies, or temporary files.
+```gitignore
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Generated RIR files (if any output directories are created during generation)
+rir_output/
+output/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+
+# Environment files
+.env
+.env.local
+*.env.*
+
+# Coverage reports
+.coverage
+coverage/
+htmlcov/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+```

@@ -38,19 +38,18 @@ FLOAT_WAV_PEAK_TARGET_MAX: float = 0.98
 
 
 def normalize_rms(y, sigma=1.):
+    """Нормализовать сигнал к заданному RMS."""
     k = sigma / (np.std(y) + 1e-12)
     return k * y
 
 
 def normalize_to_random_rms(y, rms_min=0, rms_max=1.0, rng = None):
+    """Нормализовать сигнал к случайному RMS в диапазоне [rms_min, rms_max]."""
     if rng is None:
         rng = np.random.default_rng()        
     sigma = np.sqrt(rng.uniform(rms_min ** 2, rms_max ** 2))
     return normalize_rms(y, sigma), sigma
 
-def clipping(y):
-    y_clipped = np.clip(y, -1.0, 1.0)
-    return y_clipped
 
 def limit_float_wav_peak(
     y: np.ndarray,
@@ -66,6 +65,33 @@ def limit_float_wav_peak(
     if p > peak_target:
         y = y * (peak_target / p)
     return y.astype(np.float32)
+
+
+def scale_to_target_peak(
+    y: np.ndarray,
+    peak_target_min: float = 0.10,
+    peak_target_max: float = 0.98,
+    rng = None,
+) -> np.ndarray:
+    """Масштабировать сигнал к целевому пику в диапазоне [peak_target_min, peak_target_max].
+    
+    В отличие от limit_float_wav_peak, эта функция масштабирует сигнал
+    к указанному целевому значению пика, а не только ограничивает сверху.
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+    y = np.asarray(y, dtype=np.float32)
+    p = float(np.max(np.abs(y)))
+    if p < 1e-12:
+        return y
+    peak_target = rng.uniform(peak_target_min, peak_target_max)
+    y = y * (peak_target / p)
+    return y.astype(np.float32)
+
+
+def is_silent(y, threshold=0.01):
+    """Проверить, является ли сигнал тишиной (максимальная амплитуда ниже порога)."""
+    return float(np.max(np.abs(y))) < threshold
 
 
 # ==========================================================================

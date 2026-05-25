@@ -331,6 +331,8 @@ def build_config(
         "rms_normalize": args.rms_normalize,
         "rms_min": args.rms_min,
         "rms_max": args.rms_max,
+        "peak_target_min": 0.10,
+        "peak_target_max": 0.98,
 
         # Классы
         "classes_plan": classes_plan,
